@@ -1,2 +1,2 @@
 # swarm_rl
-RL for Dronw Swarms
+RL for Drone Swarms
