@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Drone Combat Simulation</title>
+    <link rel="icon" href="data:,">
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@HEAD/builds/ammo.wasm.js"></script>
+    <script>
+        // Wait for Ammo.js WASM to be ready
+        Ammo().then(function(AmmoLib) {
+            window.Ammo = AmmoLib;
+            // Now load the game code
+            const script = document.createElement('script');
+            script.src = 'game.js';
+            document.body.appendChild(script);
+        }).catch(function(error) {
+            console.error('Error loading Ammo.js:', error);
+        });
+    </script>
+</body>
+</html>
