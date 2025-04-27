@@ -134,13 +134,31 @@ def train_simple_agent(total_timesteps=10000,
                        save_path="drone_agent_model",
                        record_replay=False,
                        replay_path=None,
-                       max_steps=10000):
-    """Train a simple PPO agent on the environment"""
+                       max_steps=10000,
+                       num_blue_drones=1,
+                       num_red_drones=1):
+    """
+    Train a simple PPO agent on the drone combat environment
+    
+    Args:
+        total_timesteps: Number of timesteps to train for
+        save_path: Path to save the trained model
+        record_replay: Whether to record replay data
+        replay_path: Path to save replay data
+        max_steps: Maximum steps per episode
+        num_blue_drones: Number of blue drones (controlled by the agent)
+        num_red_drones: Number of red drones (opponents)
+    
+    Returns:
+        Trained PPO model
+    """
     # Create environment with replay recording if specified
     env = DroneCombatEnv(
         record_replay=record_replay, 
         replay_path=replay_path, 
-        max_steps=max_steps, 
+        max_steps=max_steps,
+        num_blue_drones=num_blue_drones,
+        num_red_drones=num_red_drones
     )
     
     # Create PPO agent
@@ -214,7 +232,9 @@ def evaluate_agent(
     model_path="drone_agent_model", 
     num_episodes=1000, 
     record_replay=True, 
-    replay_path="eval_replay.json"
+    replay_path="eval_replay.json",
+    num_red_drones=1,
+    num_blue_drones=1
 ):
     """Evaluate a trained agent over multiple episodes"""
     # Create environment with replay recording if specified
@@ -222,6 +242,8 @@ def evaluate_agent(
         record_replay=record_replay,
         replay_path=replay_path,
         max_steps=num_episodes,
+        num_red_drones=num_red_drones,
+        num_blue_drones=num_blue_drones
     )
 
     # Load model
@@ -283,6 +305,10 @@ if __name__ == "__main__":
                         help="Record replay data during execution")
     parser.add_argument("--replay-path", type=str, default=None,
                         help="Path to save replay data (default: replay.json)")
+    parser.add_argument("--num-red-drones", type=int, default=1,
+                        help="Number of red drones (opponents)", choices=range(1, 6))
+    parser.add_argument("--num-blue-drones", type=int, default=1,
+                        help="Number of blue drones (controlled by the agent)", choices=range(1, 6))
     
     args = parser.parse_args()
     
@@ -305,7 +331,9 @@ if __name__ == "__main__":
             save_path=args.model_path,
             record_replay=args.record_replay,
             replay_path=args.replay_path,
-            max_steps=max_steps
+            max_steps=max_steps,
+            num_red_drones=args.num_red_drones,
+            num_blue_drones=args.num_blue_drones
         )
     
     elif args.mode == "visualize":
@@ -316,7 +344,9 @@ if __name__ == "__main__":
         env = DroneCombatEnv(
             render_mode="human",
             record_replay=args.record_replay,
-            replay_path=args.replay_path
+            replay_path=args.replay_path,
+            num_red_drones=args.num_red_drones,
+            num_blue_drones=args.num_blue_drones
         )
         
         # Parse additional visualization parameters
@@ -336,9 +366,12 @@ if __name__ == "__main__":
         print(f"Evaluating agent over {args.episodes} episodes...")
         if args.record_replay:
             print(f"Recording replay data to {args.replay_path if args.replay_path else 'replay.json'}")
+        print(f"Using {args.num_blue_drones} blue drones and {args.num_red_drones} red drones")
         evaluate_agent(
             model_path=args.model_path, 
             num_episodes=args.episodes,
             record_replay=args.record_replay,
-            replay_path=args.replay_path
+            replay_path=args.replay_path,
+            num_red_drones=args.num_red_drones,
+            num_blue_drones=args.num_blue_drones
         )

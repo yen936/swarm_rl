@@ -19,9 +19,21 @@ class DroneCombatEnv(gym.Env):
     """
     metadata = {'render_modes': ['human', 'rgb_array'], 'render_fps': 30}
 
-    def __init__(self, config_path='world_config.json', render_mode=None, max_steps=500, record_replay=False, replay_path=None):
+    def __init__(self, 
+    config_path='world_config.json', 
+    render_mode=None, max_steps=500, 
+    record_replay=False, 
+    replay_path=None, 
+    num_red_drones=1, 
+    num_blue_drones=1,
+    max_drones_per_team=5):
         super(DroneCombatEnv, self).__init__()
 
+        # Drone team configuration
+        self.num_red_drones = min(num_red_drones, max_drones_per_team)
+        self.num_blue_drones = min(num_blue_drones, max_drones_per_team)
+        self.max_drones_per_team = max_drones_per_team
+        
         # Load world configuration
         self.world = World(config_path=config_path)
 
@@ -31,20 +43,33 @@ class DroneCombatEnv(gym.Env):
         self.render_mode = render_mode
         self.drone_size = 0.25  # Size of drone (cube side length in meters)
 
-        # Define action space: [dx, dy, dz, shoot]
+        # Define action space for all blue drones: [dx1, dy1, dz1, shoot1, dx2, dy2, dz2, shoot2, ...]
         # dx, dy, dz are continuous values for movement
         # shoot is binary (0 or 1)
+        # Action space size depends on number of blue drones
+        action_dim_per_drone = 4  # [dx, dy, dz, shoot] for each drone
+        total_action_dim = action_dim_per_drone * self.num_blue_drones
+        
+        # Create action space with appropriate dimensions
+        low_values = np.array([-1.0, -1.0, -1.0, 0.0] * self.num_blue_drones)
+        high_values = np.array([1.0, 1.0, 1.0, 1.0] * self.num_blue_drones)
+        
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0, -1.0, 0.0]),
-            high=np.array([1.0, 1.0, 1.0, 1.0]),
+            low=low_values,
+            high=high_values,
             dtype=np.float32
         )
-
-        # Define observation space: [own_x, own_y, own_z, opponent_x, opponent_y, opponent_z]
+        
+        # Calculate observation space size based on number of drones
+        # For each drone: [x, y, z] coordinates
+        # Format: [own_x, own_y, own_z, opponent_1_x, opponent_1_y, opponent_1_z, ...]
+        obs_size = 3 + (3 * self.num_red_drones)  # For blue agent: own position + all red drone positions
+        
+        # Define observation space
         # Each position is normalized to [0, 1] within the world bounds
         self.observation_space = spaces.Box(
-            low=np.zeros(6),
-            high=np.ones(6),
+            low=np.zeros(obs_size),
+            high=np.ones(obs_size),
             dtype=np.float32
         )
 
@@ -73,26 +98,68 @@ class DroneCombatEnv(gym.Env):
         self.current_step_data = {}
 
     def _initialize_drones(self):
-        """Initialize the drones based on the world configuration"""
-        # Get drones from the world
-        if len(self.world.drones) >= 2:
-            # Use existing drones from world config
-            self.red_drone = next((d for d in self.world.drones if d.team == "red"), None)
-            self.blue_drone = next((d for d in self.world.drones if d.team == "blue"), None)
-        else:
-            # Create default drones if not enough in config
-            self.red_drone = Drone(0.5, 0.5, 1.0, "red")
-            self.blue_drone = Drone(9.0, 9.0, 1.0, "blue")
-        # Game state
-        self.red_hit = False
-        self.blue_hit = False
+        """Initialize the drones based on the world configuration and specified counts"""
+        # Initialize drone lists
+        self.red_drones = []
+        self.blue_drones = []
+        self.drone_hit_status = {}  # Track which drones have been hit
+        
+        # Get drones from the world configuration
+        existing_red_drones = [d for d in self.world.drones if d.team == "red"]
+        existing_blue_drones = [d for d in self.world.drones if d.team == "blue"]
+        
+        # Use existing drones from config if available
+        for i in range(self.num_red_drones):
+            if i < len(existing_red_drones):
+                # Use existing drone from config
+                drone = existing_red_drones[i]
+            else:
+                # Create new drone with default position
+                # Spread drones out in a line formation
+                x = 0.5 + (i * 0.5)
+                y = 0.5
+                z = 1.0
+                drone = Drone(x, y, z, "red")
+                # Add to world
+                self.world.drones.append(drone)
+            
+            self.red_drones.append(drone)
+            self.drone_hit_status[drone] = False
+        
+        for i in range(self.num_blue_drones):
+            if i < len(existing_blue_drones):
+                # Use existing drone from config
+                drone = existing_blue_drones[i]
+            else:
+                # Create new drone with default position
+                # Spread drones out in a line formation on opposite side
+                x = 9.0 - (i * 0.5)
+                y = 9.0
+                z = 1.0
+                drone = Drone(x, y, z, "blue")
+                # Add to world
+                self.world.drones.append(drone)
+            
+            self.blue_drones.append(drone)
+            self.drone_hit_status[drone] = False
+            
+        # For backward compatibility - keep references to first drone of each team
+        if self.red_drones:
+            self.red_drone = self.red_drones[0]
+        if self.blue_drones:
+            self.blue_drone = self.blue_drones[0]
+            
+        # Game state flags
+        self.red_hit = False  # Any red drone hit
+        self.blue_hit = False  # Any blue drone hit
 
-    def _get_normalized_observation(self, agent_team):
+    def _get_normalized_observation(self, agent_team, agent_index=0):
         """
         Get the normalized observation for a specific agent
         
         Args:
             agent_team: "red" or "blue" to specify which agent's perspective
+            agent_index: Index of the agent within its team (default: 0)
             
         Returns:
             numpy array of normalized observations
@@ -100,31 +167,56 @@ class DroneCombatEnv(gym.Env):
         world_size_x = self.world.size_x
         world_size_y = self.world.size_y
         world_size_z = self.world.size_z
-
+        
+        # Normalize a position
+        def normalize_position(drone):
+            return np.array([
+                drone.x / world_size_x,
+                drone.y / world_size_y,
+                drone.z / world_size_z
+            ])
+        
         if agent_team == "red":
-            own_pos = np.array([
-                self.red_drone.x / world_size_x,
-                self.red_drone.y / world_size_y,
-                self.red_drone.z / world_size_z
-            ])
-            opponent_pos = np.array([
-                self.blue_drone.x / world_size_x,
-                self.blue_drone.y / world_size_y,
-                self.blue_drone.z / world_size_z
-            ])
+            # Get the specific red drone's position as 'own position'
+            if agent_index < len(self.red_drones):
+                own_drone = self.red_drones[agent_index]
+                own_pos = normalize_position(own_drone)
+            else:
+                # Fallback if index is out of range
+                own_pos = np.zeros(3)
+                
+            # Get all blue drones' positions as 'opponent positions'
+            opponent_positions = []
+            for blue_drone in self.blue_drones:
+                opponent_positions.append(normalize_position(blue_drone))
+                
+            # If no opponents, add zeros
+            if not opponent_positions:
+                opponent_positions = [np.zeros(3) for _ in range(self.num_blue_drones)]
+                
         else:  # blue
-            own_pos = np.array([
-                self.blue_drone.x / world_size_x,
-                self.blue_drone.y / world_size_y,
-                self.blue_drone.z / world_size_z
-            ])
-            opponent_pos = np.array([
-                self.red_drone.x / world_size_x,
-                self.red_drone.y / world_size_y,
-                self.red_drone.z / world_size_z
-            ])
-
-        return np.concatenate([own_pos, opponent_pos]).astype(np.float32)
+            # Get the specific blue drone's position as 'own position'
+            if agent_index < len(self.blue_drones):
+                own_drone = self.blue_drones[agent_index]
+                own_pos = normalize_position(own_drone)
+            else:
+                # Fallback if index is out of range
+                own_pos = np.zeros(3)
+                
+            # Get all red drones' positions as 'opponent positions'
+            opponent_positions = []
+            for red_drone in self.red_drones:
+                opponent_positions.append(normalize_position(red_drone))
+                
+            # If no opponents, add zeros
+            if not opponent_positions:
+                opponent_positions = [np.zeros(3) for _ in range(self.num_red_drones)]
+        
+        # Flatten opponent positions into a 1D array
+        flattened_opponent_pos = np.concatenate(opponent_positions).flatten()
+        
+        # Combine own position with all opponent positions
+        return np.concatenate([own_pos, flattened_opponent_pos]).astype(np.float32)
 
     def _calculate_distance(self, drone1, drone2):
         """Calculate Euclidean distance between two drones"""
@@ -133,6 +225,50 @@ class DroneCombatEnv(gym.Env):
             (drone1.y - drone2.y) ** 2 +
             (drone1.z - drone2.z) ** 2
         )
+        
+    def _assign_targets_hungarian(self, shooters, targets):
+        """
+        Use the Hungarian algorithm to optimally assign targets to shooters
+        
+        Args:
+            shooters: List of shooter drones (blue team)
+            targets: List of target drones (red team)
+            
+        Returns:
+            List of (shooter, target) pairs representing optimal assignments
+        """
+        if not shooters or not targets:
+            return []  # No assignment possible if either list is empty
+        
+        # Create cost matrix: rows=shooters, cols=targets
+        # Each cell contains the cost (distance) between a shooter and target
+        cost_matrix = np.zeros((len(shooters), len(targets)))
+        
+        # Fill the cost matrix with distances
+        for i, shooter in enumerate(shooters):
+            for j, target in enumerate(targets):
+                # Base cost is distance
+                distance = self._calculate_distance(shooter, target)
+                
+                # Check line of sight - add large penalty if no line of sight
+                has_los = self._has_line_of_sight(shooter, target)
+                los_penalty = 0 if has_los else 1000  # Large penalty for no line of sight
+                
+                # Final cost combines distance and line of sight
+                cost_matrix[i, j] = distance + los_penalty
+        
+        # Use Hungarian algorithm to find optimal assignment
+        # This minimizes the total cost (distance + penalties)
+        row_indices, col_indices = linear_sum_assignment(cost_matrix)
+        
+        # Create assignment pairs
+        assignments = []
+        for row_idx, col_idx in zip(row_indices, col_indices):
+            # Only include assignments where there's line of sight (cost < 1000)
+            if cost_matrix[row_idx, col_idx] < 1000:  # No line of sight penalty
+                assignments.append((shooters[row_idx], targets[col_idx]))
+        
+        return assignments
 
     def _check_building_collision(self, drone):
         """
@@ -320,97 +456,180 @@ class DroneCombatEnv(gym.Env):
         # Increment step counter
         self.step_count += 1
 
-        # Parse action
-        dx_blue, dy_blue, dz_blue, shoot_blue = action
-
-        # For now, red agent takes random actions
-        red_action = self.action_space.sample()
-        dx_red, dy_red, dz_red, shoot_red = red_action
-
-        # Calculate distance before movement
-        distance_before = self._calculate_distance(self.red_drone, self.blue_drone)
-
         # Initialize rewards with base step penalty
         reward = self.step_penalty
-
-        # Move drones and check for collisions
-        red_collision = self._move_drone(self.red_drone, dx_red, dy_red, dz_red)
-        blue_collision = self._move_drone(self.blue_drone, dx_blue, dy_blue, dz_blue)
-
-        # Apply collision penalties if needed
-        if blue_collision:
-            reward += self.collision_penalty  # Penalty for blue (trained agent) colliding
         
-        # Calculate distance after movement
-        distance_after = self._calculate_distance(self.red_drone, self.blue_drone)
-
-        # Calculate proximity reward (positive if getting closer)
-        distance_change = distance_before - distance_after
-        proximity_reward = distance_change * self.proximity_reward_factor
-
-        # Add proximity reward
-        reward += proximity_reward
-
-        # Process shooting
-        if shoot_red > 0.5:  # Red agent shoots if action[3] > 0.5
-            # Check line of sight before simulating shot
-            has_los = self._has_line_of_sight(self.red_drone, self.blue_drone)
-
-            # Only allow shots if there's line of sight
-            if has_los:
-                hit = self._simulate_shot(self.red_drone, self.blue_drone)
-                if hit:
-                    reward -= self.hit_reward  # Negative reward if blue gets hit
-                    # Also lose the kill all reward opportunity
-                    reward -= self.kill_all_reward
-                    self.blue_hit = True
-                    if not any(d.team == 'blue' for d in self.world.drones if d != self.blue_drone):
-                        reward += self.kill_all_reward
-                        print("FAILUREL RED agent killed all drones!")
-
-        if shoot_blue > 0.5:  # Blue agent shoots
-            # Check line of sight before simulating shot
-            has_los = self._has_line_of_sight(self.blue_drone, self.red_drone)
-
-            # Only allow shots if there's line of sight
-            if has_los:
-                hit = self._simulate_shot(self.blue_drone, self.red_drone)
-                if hit:
-                    reward += self.hit_reward  # Positive reward if blue hits red
-                    self.red_hit = True
-                    # Add kill all reward if this was the only enemy
-                    if not any(d.team == 'red' for d in self.world.drones if d != self.red_drone):
-                        reward += self.kill_all_reward
-                        print("SUCCESS: BLUE agent killed all drones!")
-                else:
-                    reward += self.missed_shot_penalty
+        # Track collisions for each team
+        red_collisions = [False] * len(self.red_drones)
+        blue_collisions = [False] * len(self.blue_drones)
+        
+        # Parse actions for all blue drones
+        # Each drone has 4 action values: [dx, dy, dz, shoot]
+        blue_actions = []
+        for i in range(self.num_blue_drones):
+            # Extract action for each blue drone
+            start_idx = i * 4
+            if start_idx + 4 <= len(action):  # Ensure we have enough action values
+                drone_action = action[start_idx:start_idx+4]
+                blue_actions.append(drone_action)
             else:
-                # No line of sight, shot automatically misses
-                reward += self.missed_shot_penalty
-
+                # Fallback if action space doesn't match expected size
+                blue_actions.append(np.array([-1.0, -1.0, -1.0, 0.0]))
+        
+        # Move all red drones (with random actions for now)
+        for i, red_drone in enumerate(self.red_drones):
+            # Generate random action for each red drone
+            red_action = np.array([-1.0, -1.0, -1.0, 0.0])
+            red_action[:3] = np.random.uniform(-1.0, 1.0, 3)  # Random movement
+            red_action[3] = np.random.choice([0.0, 1.0])  # Random shoot decision
+            dx_red, dy_red, dz_red, shoot_red = red_action
+            
+            # Move the drone and check for collisions
+            red_collisions[i] = self._move_drone(red_drone, dx_red, dy_red, dz_red)
+        
+        # Move all blue drones (all controlled by the agent)
+        for i, blue_drone in enumerate(self.blue_drones):
+            if i < len(blue_actions):  # Make sure we have actions for this drone
+                dx_blue, dy_blue, dz_blue, _ = blue_actions[i]  # Extract movement components
+                blue_collisions[i] = self._move_drone(blue_drone, dx_blue, dy_blue, dz_blue)
+        
+        # Apply collision penalties for the primary blue drone
+        if blue_collisions[0]:  # Only penalize the primary blue drone's collisions
+            reward += self.collision_penalty
+        
+        # Calculate proximity rewards based on average distance to enemies
+        if self.blue_drones and self.red_drones:  # Only if both teams have drones
+            # Get the primary blue drone
+            primary_blue = self.blue_drones[0]
+            
+            # Calculate average distance to all red drones before and after movement
+            # This is a simplification - more sophisticated reward schemes could be implemented
+            avg_distance_before = sum(self._calculate_distance(primary_blue, red_drone) 
+                                     for red_drone in self.red_drones) / len(self.red_drones)
+            
+            # Distance after movement (using updated positions)
+            avg_distance_after = sum(self._calculate_distance(primary_blue, red_drone) 
+                                    for red_drone in self.red_drones) / len(self.red_drones)
+            
+            # Calculate proximity reward (positive if getting closer)
+            distance_change = avg_distance_before - avg_distance_after
+            proximity_reward = distance_change * self.proximity_reward_factor
+            reward += proximity_reward
+        
+        # Process shooting for red drones
+        red_shots = []
+        for i, red_drone in enumerate(self.red_drones):
+            # Randomly decide if this red drone shoots
+            shoot_red = np.random.random() > 0.5
+            red_shots.append(shoot_red)
+            
+            if shoot_red:
+                # Find closest blue drone as target
+                if self.blue_drones:  # Only if there are blue drones left
+                    # Find the closest blue drone
+                    distances = [self._calculate_distance(red_drone, blue_drone) 
+                               for blue_drone in self.blue_drones]
+                    closest_idx = np.argmin(distances)
+                    target_blue = self.blue_drones[closest_idx]
+                    
+                    # Check line of sight
+                    has_los = self._has_line_of_sight(red_drone, target_blue)
+                    
+                    if has_los:
+                        hit = self._simulate_shot(red_drone, target_blue)
+                        if hit:
+                            # Mark the drone as hit
+                            self.drone_hit_status[target_blue] = True
+                            
+                            # If this was the primary blue drone, apply negative reward
+                            if target_blue == self.blue_drone:  # Primary blue drone
+                                reward -= self.hit_reward
+                                self.blue_hit = True
+                                
+                                # Check if all blue drones are hit
+                                if all(self.drone_hit_status.get(d, False) for d in self.blue_drones):
+                                    print("FAILURE: RED team eliminated all BLUE drones!")
+                                    reward -= self.kill_all_reward
+        
+        # Process shooting for all blue drones
+        blue_shots = [False] * len(self.blue_drones)
+        
+        # Identify blue drones that are shooting
+        shooting_blue_drones = []
+        for i, blue_drone in enumerate(self.blue_drones):
+            if i < len(blue_actions):  # Make sure we have actions for this drone
+                # Extract shoot decision from action
+                _, _, _, shoot_blue = blue_actions[i]
+                
+                if shoot_blue > 0.5:  # Blue drone decides to shoot
+                    blue_shots[i] = True
+                    shooting_blue_drones.append(blue_drone)
+        
+        # Get available red targets (not already hit)
+        available_targets = [d for d in self.red_drones if not self.drone_hit_status.get(d, False)]
+        
+        # Use Hungarian algorithm for optimal target assignment if we have shooters and targets
+        if shooting_blue_drones and available_targets:
+            # Get optimal shooter-target assignments
+            assignments = self._assign_targets_hungarian(shooting_blue_drones, available_targets)
+            
+            # Process each assignment
+            for shooter, target in assignments:
+                # Simulate the shot
+                hit = self._simulate_shot(shooter, target)
+                
+                if hit:
+                    # Mark the drone as hit
+                    self.drone_hit_status[target] = True
+                    
+                    # Apply positive reward - each hit gives reward
+                    reward += self.hit_reward
+                    
+                    # Check if this was the primary red drone
+                    if target == self.red_drone:
+                        self.red_hit = True
+                    
+                    print(f"Blue drone at ({shooter.x:.1f}, {shooter.y:.1f}, {shooter.z:.1f}) hit red drone at ({target.x:.1f}, {target.y:.1f}, {target.z:.1f})")
+                else:
+                    # Small penalty for missed shot
+                    reward += self.missed_shot_penalty / len(shooting_blue_drones)  # Divide penalty among shooting drones
+                    print(f"Blue drone at ({shooter.x:.1f}, {shooter.y:.1f}, {shooter.z:.1f}) missed red drone at ({target.x:.1f}, {target.y:.1f}, {target.z:.1f})")
+            
+            # Check if all red drones are hit after this round of shooting
+            if all(self.drone_hit_status.get(d, False) for d in self.red_drones):
+                print("SUCCESS: BLUE team eliminated all RED drones using optimal targeting!")
+                reward += self.kill_all_reward
+        
         # Check termination conditions
+        # Episode ends if primary drones of either team are hit or max steps reached
         terminated = self.red_hit or self.blue_hit or self.step_count >= self.max_steps
         truncated = False
+        
+        # Get new observation for the primary blue agent
+        observation = self._get_normalized_observation("blue", 0)
 
-        # Get new observation
-        observation = self._get_normalized_observation("blue")
-
-        # Create info dictionary
+        # Create info dictionary with enhanced information for multiple drones
         info = {
             "red_hit": self.red_hit,
             "blue_hit": self.blue_hit,
             "step_count": self.step_count,
-            "red_collision": red_collision,
-            "blue_collision": blue_collision,
-            "has_line_of_sight": self._has_line_of_sight(self.red_drone, self.blue_drone)
+            "red_collisions": red_collisions,
+            "blue_collisions": blue_collisions,
+            "num_red_drones": len(self.red_drones),
+            "num_blue_drones": len(self.blue_drones),
+            "drone_hit_status": {str(i): hit for i, hit in enumerate(self.drone_hit_status.values())}
         }
+        
+        # Add line of sight information if primary drones exist
+        if self.red_drones and self.blue_drones:
+            info["has_line_of_sight"] = self._has_line_of_sight(self.red_drones[0], self.blue_drones[0])
 
         # Update world state (for visualization)
         self.world.update()
 
         # Record replay frame if enabled
         if self.record_replay:
-            self._record_replay_frame(action, reward, self.step_count, shoot_red > 0.5, shoot_blue > 0.5)
+            self._record_replay_frame(action, reward, self.step_count, red_shots, blue_shots)
 
         return observation, reward, terminated, truncated, info
 
@@ -434,30 +653,50 @@ class DroneCombatEnv(gym.Env):
         if self.render_mode == "rgb_array":
             return np.zeros((400, 400, 3), dtype=np.uint8)  # Placeholder
 
-    def _record_replay_frame(self, action, reward, step, red_shot, blue_shot):
-        """Record a frame of replay data"""
+    def _record_replay_frame(self, action, reward, step, red_shots, blue_shots):
+        """Record a frame of replay data with support for multiple drones"""
+        # Convert boolean inputs to lists if needed
+        if isinstance(red_shots, bool):
+            red_shots = [red_shots] * len(self.red_drones)
+        elif red_shots is None or not hasattr(red_shots, '__iter__'):
+            red_shots = [False] * len(self.red_drones)
+            
+        if isinstance(blue_shots, bool):
+            blue_shots = [blue_shots] * len(self.blue_drones)
+        elif blue_shots is None or not hasattr(blue_shots, '__iter__'):
+            blue_shots = [False] * len(self.blue_drones)
+        
         # Create frame data
         frame = {
             "step": int(step),
             "timestamp": datetime.now().isoformat(),
-            "red_drone": {
-                "x": float(self.red_drone.x),
-                "y": float(self.red_drone.y),
-                "z": float(self.red_drone.z),
-                "team": str(self.red_drone.team)
-            },
-            "blue_drone": {
-                "x": float(self.blue_drone.x),
-                "y": float(self.blue_drone.y),
-                "z": float(self.blue_drone.z),
-                "team": str(self.blue_drone.team)
-            },
-            "has_line_of_sight": bool(self._has_line_of_sight(self.red_drone, self.blue_drone)),
-            "red_shot": bool(red_shot),
-            "blue_shot": bool(blue_shot),
+            "red_drones": [
+                {
+                    "x": float(drone.x),
+                    "y": float(drone.y),
+                    "z": float(drone.z),
+                    "team": str(drone.team),
+                    "shot": bool(shot) if i < len(red_shots) else False,
+                    "hit": bool(self.drone_hit_status.get(drone, False))
+                } for i, (drone, shot) in enumerate(zip(self.red_drones, red_shots))
+            ],
+            "blue_drones": [
+                {
+                    "x": float(drone.x),
+                    "y": float(drone.y),
+                    "z": float(drone.z),
+                    "team": str(drone.team),
+                    "shot": bool(shot) if i < len(blue_shots) else False,
+                    "hit": bool(self.drone_hit_status.get(drone, False))
+                } for i, (drone, shot) in enumerate(zip(self.blue_drones, blue_shots))
+            ],
             "red_hit": bool(self.red_hit),
             "blue_hit": bool(self.blue_hit)
         }
+        
+        # Add line of sight information if primary drones exist
+        if self.red_drones and self.blue_drones:
+            frame["has_line_of_sight"] = bool(self._has_line_of_sight(self.red_drones[0], self.blue_drones[0]))
 
         # Add action and reward if not initial frame
         if action is not None:
