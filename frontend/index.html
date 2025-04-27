@@ -1,27 +1,18 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Drone Combat Simulation</title>
-    <link rel="icon" href="data:,">
+    <title>Drone Swarm Simulation</title>
     <style>
         body { margin: 0; }
         canvas { display: block; }
     </style>
 </head>
 <body>
+    <!-- Three.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@HEAD/builds/ammo.wasm.js"></script>
-    <script>
-        // Wait for Ammo.js WASM to be ready
-        Ammo().then(function(AmmoLib) {
-            window.Ammo = AmmoLib;
-            // Now load the game code
-            const script = document.createElement('script');
-            script.src = 'game.js';
-            document.body.appendChild(script);
-        }).catch(function(error) {
-            console.error('Error loading Ammo.js:', error);
-        });
-    </script>
+    <!-- OrbitControls for camera manipulation -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Our game script -->
+    <script src="game1.js"></script>
 </body>
 </html>
