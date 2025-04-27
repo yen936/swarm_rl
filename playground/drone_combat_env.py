@@ -311,9 +311,6 @@ class DroneCombatEnv(gym.Env):
         dy = target.y - shooter.y
         dz = target.z - shooter.z
 
-        # Distance between drones
-        distance = self._calculate_distance(shooter, target)
-
         # Number of points to check along the line - increase for better accuracy
         num_points = 20
 
@@ -351,7 +348,7 @@ class DroneCombatEnv(gym.Env):
         distance = self._calculate_distance(shooter, target)
 
         # Accuracy decreases with distance (standard deviation increases)
-        accuracy = self.accuracy_base * distance
+        accuracy = self.accuracy_base * (distance ** 1.2) 
 
         # Simulate shot with Gaussian noise
         shot_x = target.x + np.random.normal(0, accuracy)
@@ -520,7 +517,7 @@ class DroneCombatEnv(gym.Env):
         red_shots = []
         for i, red_drone in enumerate(self.red_drones):
             # Randomly decide if this red drone shoots
-            shoot_red = np.random.random() > 0.5
+            shoot_red = np.random.random() > 0.8
             red_shots.append(shoot_red)
             
             if shoot_red:
@@ -593,7 +590,6 @@ class DroneCombatEnv(gym.Env):
                 else:
                     # Small penalty for missed shot
                     reward += self.missed_shot_penalty / len(shooting_blue_drones)  # Divide penalty among shooting drones
-                    print(f"Blue drone at ({shooter.x:.1f}, {shooter.y:.1f}, {shooter.z:.1f}) missed red drone at ({target.x:.1f}, {target.y:.1f}, {target.z:.1f})")
             
             # Check if all red drones are hit after this round of shooting
             if all(self.drone_hit_status.get(d, False) for d in self.red_drones):

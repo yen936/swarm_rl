@@ -27,7 +27,7 @@ class TrainingRequest(BaseModel):
         default=10000, ge=1000, description="Total timesteps for training"
     )
     save_path: str = Field(
-        default="drone_agent_model", description="Path to save the trained model"
+        default="drone_ft_agent_model", description="Path to save the trained model"
     )
     record_replay: bool = Field(
         default=True, description="Whether to record replay data"
@@ -40,11 +40,7 @@ class TrainingRequest(BaseModel):
     )
     max_steps: int = Field(
         default=1000, ge=100, description="Maximum steps per episode"
-    )
-    episodes_per_save: int = Field(
-        default=5, ge=1, description="Number of episodes between each model save"
-    )
-
+    )  
 
 class TrainingResponse(BaseModel):
     """Response model for training completion"""
@@ -56,8 +52,6 @@ class TrainingResponse(BaseModel):
     replay_path: Optional[str] = None
     replay_data: Optional[dict] = None
     all_replays_path: Optional[str] = None
-    episode_count: Optional[int] = None
-
 
 @app.post("/train", response_model=TrainingResponse)
 async def train_drone_agent(request: TrainingRequest):
@@ -82,11 +76,10 @@ async def train_drone_agent(request: TrainingRequest):
                 num_red_drones=request.num_red_drones,
                 save_path=request.save_path,
                 record_replay=True,  # Always record when collecting all replays
-                max_steps=request.max_steps,
-                episodes_per_save=request.episodes_per_save
+                max_steps=request.max_steps
             )
             replay_data = all_replays
-            episode_count = len(all_replays) if isinstance(all_replays, dict) else 0
+
         else:
             print("Collecting only final replay")
             model, replay_data = train_agent(
@@ -97,7 +90,6 @@ async def train_drone_agent(request: TrainingRequest):
                 record_replay=request.record_replay,
                 replay_path=request.replay_path
             )
-            episode_count = 1
 
         # Prepare response
         response = TrainingResponse(
@@ -109,8 +101,6 @@ async def train_drone_agent(request: TrainingRequest):
 
         # Include replay data in the response
         if replay_data:
-            response.episode_count = episode_count
-            
             # Only include the actual replay data if it's not too large
             # This prevents response size issues with many episodes
             estimated_size = len(str(replay_data))
