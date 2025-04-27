@@ -12,44 +12,6 @@ python3 test_drone_rl.py --mode train --timesteps 20000 --model-path drone_comba
 python3 test_drone_rl.py --mode evaluate --model-path drone_combat_model --episodes 1
 """
 
-
-# def test_environment_manually():
-#     """Test the environment with random actions"""
-#     # Create environment with replay recording if specified
-#     env = DroneCombatEnv(record_replay=args.record_replay, replay_path=args.replay_path)
-    
-#     # Check if environment follows Gym API
-#     check_env(env)
-#     print("Environment check passed!")
-    
-#     # Reset environment
-#     obs, info = env.reset()
-    
-#     # Run a few random steps
-#     total_reward = 0
-#     for i in range(20):
-#         # Sample random action
-#         action = env.action_space.sample()
-        
-#         # Take step in environment
-#         obs, reward, terminated, truncated, info = env.step(action)
-#         total_reward += reward
-        
-#         print(f"Step {i+1}")
-#         print(f"  Action: {action}")
-#         print(f"  Observation: {obs}")
-#         print(f"  Reward: {reward}")
-#         print(f"  Info: {info}")
-        
-#         if terminated or truncated:
-#             print("Episode finished early!")
-#             break
-    
-#     print(f"Total reward: {total_reward}")
-    
-#     # Close environment
-#     env.close()
-
 def train_agent(total_timesteps=10000,
                        save_path="drone_agent_model",
                        record_replay=True,  

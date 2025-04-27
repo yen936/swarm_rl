@@ -1,3 +1,7 @@
 
 */drone_combat_model.zip
 */drone_combat_model1.zip
+.DS_Store
+playground/__pycache__/api.cpython-310.pyc
+playground/__pycache__/swarm_trainer.cpython-310.pyc
+.DS_Store
