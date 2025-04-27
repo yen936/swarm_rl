@@ -12,6 +12,7 @@ python3 test_drone_rl.py --timesteps 10 --mode test
 python test_drone_rl.py --mode train --timesteps 50000 --model-path drone_combat_model --record-replay
 python3 test_drone_rl.py --mode visualize --model-path drone_combat_model   
 python3 test_drone_rl.py --mode train --timesteps 20000 --model-path drone_combat_model
+python3 test_drone_rl.py --mode evaluate --model-path drone_combat_model --episodes 1
 """
 
 
@@ -129,16 +130,24 @@ def visualize_episode(env, model=None, max_steps=100, step_delay=0.5):
     # Render final state
     env.render()
 
-def train_simple_agent(total_timesteps=10000, save_path="drone_agent_model", record_replay=False, replay_path=None):
+def train_simple_agent(total_timesteps=10000,
+                       save_path="drone_agent_model",
+                       record_replay=False,
+                       replay_path=None,
+                       max_steps=10000):
     """Train a simple PPO agent on the environment"""
     # Create environment with replay recording if specified
-    env = DroneCombatEnv(record_replay=record_replay, replay_path=replay_path)
+    env = DroneCombatEnv(
+        record_replay=record_replay, 
+        replay_path=replay_path, 
+        max_steps=max_steps, 
+    )
     
     # Create PPO agent
     model = PPO(
         policy="MlpPolicy",
         env=env, 
-        learning_rate=1e-2,
+        learning_rate=0.0003,
         verbose=1
     )
     
@@ -159,60 +168,99 @@ def train_simple_agent(total_timesteps=10000, save_path="drone_agent_model", rec
     
     # Close the environment to ensure resources are released
     env.close()
+
+    # Print the model summary and episode statistics
+    print("\n" + "="*50)
+    print("MODEL TRAINING SUMMARY")
+    print("="*50)
+    
+    # Extract episode statistics from the model's logger
+    if hasattr(model, 'logger') and hasattr(model.logger, 'name_to_value'):
+        stats = model.logger.name_to_value
+        
+        # Print episode rewards
+        if 'rollout/ep_rew_mean' in stats:
+            print(f"Mean Episode Reward: {stats['rollout/ep_rew_mean']:.4f}")
+        
+        # Print episode lengths
+        if 'rollout/ep_len_mean' in stats:
+            print(f"Mean Episode Length: {stats['rollout/ep_len_mean']:.1f} steps")
+        
+        # Print value and policy loss
+        if 'train/value_loss' in stats:
+            print(f"Value Loss: {stats['train/value_loss']:.6f}")
+        if 'train/policy_loss' in stats:
+            print(f"Policy Loss: {stats['train/policy_loss']:.6f}")
+        
+        # Print other useful metrics    
+        if 'train/entropy_loss' in stats:
+            print(f"Entropy Loss: {stats['train/entropy_loss']:.6f}")
+        if 'train/learning_rate' in stats:
+            print(f"Learning Rate: {stats['train/learning_rate']:.6f}")
+        if 'train/n_updates' in stats:
+            print(f"Number of Updates: {stats['train/n_updates']}")
+        if 'time/fps' in stats:
+            print(f"Training Speed: {stats['time/fps']:.1f} FPS")
+    else:
+        print("No training statistics available")
+    
+    print("="*50)
+    print(f"Model saved to: {save_path}")
+    print("="*50)
     
     return model
 
-def evaluate_agent(model_path="drone_agent_model", num_episodes=10, record_replay=False, replay_path=None):
+def evaluate_agent(
+    model_path="drone_agent_model", 
+    num_episodes=1000, 
+    record_replay=True, 
+    replay_path="eval_replay.json"
+):
     """Evaluate a trained agent over multiple episodes"""
     # Create environment with replay recording if specified
-    env = DroneCombatEnv(record_replay=record_replay, replay_path=replay_path)
-    
+    env = DroneCombatEnv(
+        record_replay=record_replay,
+        replay_path=replay_path,
+        max_steps=num_episodes,
+    )
+
     # Load model
     model = PPO.load(model_path)
-    
+
     # Run evaluation
     rewards = []
     steps = []
-    
+
     for i in range(num_episodes):
         obs, info = env.reset()
         done = False
         episode_reward = 0
         episode_steps = 0
-        
+
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
             episode_steps += 1
             done = terminated or truncated
-        
+
         rewards.append(episode_reward)
         steps.append(episode_steps)
         print(f"Episode {i+1}: Reward = {episode_reward}, Steps = {episode_steps}")
-    
-    # Print statistics
-    print(f"Average reward: {np.mean(rewards)}")
-    print(f"Average steps: {np.mean(steps)}")
-    
-    # Plot results
-    plt.figure(figsize=(12, 5))
-    
-    plt.subplot(1, 2, 1)
-    plt.plot(rewards)
-    plt.title("Episode Rewards")
-    plt.xlabel("Episode")
-    plt.ylabel("Reward")
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(steps)
-    plt.title("Episode Steps")
-    plt.xlabel("Episode")
-    plt.ylabel("Steps")
-    
-    plt.tight_layout()
-    plt.savefig("evaluation_results.png")
-    plt.show()
+        
+    # Explicitly save replay if recording was enabled
+    if record_replay and hasattr(env, 'save_replay') and env.blue_hit:
+        try:
+            actual_path = env.save_replay(replay_path)
+            print(f"Replay explicitly saved to {actual_path}")
+            
+            # Also save a copy to replay1.json if the blue drone successfully killed the red drone
+            if any(frame.get('red_hit', False) for frame in env.replay_data):
+                success_path = "replay1.json"
+                env.save_replay(success_path)
+                print(f"Success replay saved to {success_path}")
+        except Exception as e:
+            print(f"Error saving replay: {e}")
 
 if __name__ == "__main__":
     import argparse
@@ -247,11 +295,17 @@ if __name__ == "__main__":
         if args.record_replay:
             replay_path = args.replay_path if args.replay_path else 'replay.json'
             print(f"Recording replay data to {replay_path}")
+        
+        # Set max_steps to be at least as large as timesteps to avoid early truncation
+        max_steps = max(args.timesteps // 10, 1000)  # Reasonable default based on timesteps
+        print(f"Setting max steps per episode to {max_steps}")
+        
         train_simple_agent(
             total_timesteps=args.timesteps, 
             save_path=args.model_path,
             record_replay=args.record_replay,
-            replay_path=args.replay_path
+            replay_path=args.replay_path,
+            max_steps=max_steps
         )
     
     elif args.mode == "visualize":

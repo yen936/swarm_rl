@@ -41,7 +41,7 @@ def plot_drone(ax, drone):
     # Common colors in matplotlib: red, blue, green, yellow, cyan, magenta, black, etc.
     ax.scatter(drone.x, drone.y, drone.z, color=drone.team, s=100, marker='o', label=drone.team)
 
-def visualize_world(config_path='world.json'):
+def visualize_world(config_path='world_config.json'):
     """Create a 3D visualization of the world with buildings and drones"""
     # Load the world from config
     world = World(config_path)
@@ -86,13 +86,13 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Visualize the 3D world with buildings and drones')
-    parser.add_argument('--config', type=str, default='world.json', 
-                        help='Path to the configuration file (default: world.json)')
+    parser.add_argument('--config', type=str, default='world_config.json', 
+                        help='Path to the configuration file (default: world_config.json)')
     parser.add_argument('--init', action='store_true',
-                        help='Use the initial configuration file (world_config_init.json)')
+                        help='Use the initial configuration file (world_config.json)')
     args = parser.parse_args()
     
     if args.init:
-        visualize_world('world_config_init.json')
+        visualize_world('world_config.json')
     else:
         visualize_world(args.config)

@@ -25,13 +25,6 @@
             "width": 1,
             "depth": 2,
             "height": 3
-        },
-        {
-            "x": 6,
-            "y": 4,
-            "width": 1.8,
-            "depth": 1.2,
-            "height": 4
         }
     ],
     "drones": [

@@ -24,19 +24,19 @@ class Drone:
         return f"Drone(x={self.x}, y={self.y}, z={self.z}, team={self.team})"
 
 class World:
-    def __init__(self, init_config_path='world_config_init.json', current_state_path='world.json'):
+    def __init__(self, config_path='world_config.json', current_state_path='world.json'):
         self.buildings = []
         self.drones = []
         self.simulation_step = 0
         self.timestamp = datetime.datetime.now().isoformat()
-        self.init_config_path = init_config_path
+        self.config_path = config_path
         self.current_state_path = current_state_path
         
         # If current state exists, load it; otherwise, load from init config
         if os.path.exists(current_state_path):
             self.load_state(current_state_path)
         else:
-            self.load_config(init_config_path)
+            self.load_config(config_path)
             self.save_state(current_state_path)
     
     def load_config(self, config_path):
@@ -127,7 +127,7 @@ class World:
         self.drones = []
         self.simulation_step = 0
         self.timestamp = datetime.datetime.now().isoformat()
-        self.load_config(self.init_config_path)
+        self.load_config(self.config_path)
         self.save_state()
     
     def update(self):
@@ -143,7 +143,7 @@ class World:
 
 # Example usage
 if __name__ == "__main__":
-    world = World('world_config_init.json', 'world.json')
+    world = World('world_config.json', 'world.json')
     print(world)
     print(f"Buildings: {world.buildings}")
     print(f"Drones: {world.drones}")
