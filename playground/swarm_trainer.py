@@ -2,6 +2,9 @@ from drone_combat_env import DroneCombatEnv
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 import os
+import json
+import time
+from datetime import datetime
 
 """
 example: 
@@ -155,6 +158,149 @@ def train_agent(total_timesteps=10000,
     print("="*50)
     
     return model, replay_data
+
+def train_agent_with_all_replays(total_timesteps=10000,
+                       save_path="drone_agent_model",
+                       record_replay=True,
+                       max_steps=1000,
+                       num_blue_drones=1,
+                       num_red_drones=1,
+                       episodes_per_save=5):
+    """
+    Train a PPO agent on the drone combat environment and save replays for all episodes
+    
+    Args:
+        total_timesteps: Number of timesteps to train for
+        save_path: Path to save the trained model
+        record_replay: Whether to record replay data
+        replay_dir: Directory to save replay data
+        max_steps: Maximum steps per episode
+        num_blue_drones: Number of blue drones (controlled by the agent)
+        num_red_drones: Number of red drones (opponents)
+        episodes_per_save: Number of episodes between each model save
+        
+    Returns:
+        tuple: (trained PPO model, all replay data as dict)
+    """
+    # No need to create directory for replays as we're keeping them in memory
+    
+    # Create environment with replay recording
+    env = DroneCombatEnv(
+        record_replay=record_replay,
+        max_steps=max_steps,
+        num_blue_drones=num_blue_drones,
+        num_red_drones=num_red_drones
+    )
+    
+    # Create PPO agent
+    model = PPO(
+        policy="MlpPolicy",
+        env=env,
+        learning_rate=0.0003,
+        verbose=1
+    )
+    
+    # Initialize variables for tracking episodes
+    all_replays = {}
+    episode_count = 0
+    timesteps_so_far = 0
+    
+    # Calculate episodes needed based on max_steps and total_timesteps
+    estimated_episodes = total_timesteps // max_steps + 1
+    print(f"Training for approximately {estimated_episodes} episodes")
+    
+    # Train in batches to collect replays after each episode
+    while timesteps_so_far < total_timesteps:
+        # Calculate remaining timesteps
+        remaining = total_timesteps - timesteps_so_far
+        # Train for one episode at a time to collect replays
+        batch_size = min(max_steps, remaining)
+        
+        # Train for one episode
+        model.learn(total_timesteps=batch_size, reset_num_timesteps=False)
+        timesteps_so_far += batch_size
+        episode_count += 1
+        
+        # Capture replay data if recording was enabled
+        if record_replay and hasattr(env, 'replay_data') and env.replay_data:
+            try:
+                # Create a deep copy of the replay data
+                episode_key = f"episode_{episode_count}"
+                
+                # Create metadata for this episode
+                metadata = {
+                    "timestamp": datetime.now().isoformat(),
+                    "episode": episode_count,
+                    "timesteps": batch_size,
+                    "total_timesteps_so_far": timesteps_so_far
+                }
+                
+                # Create a replay structure similar to what save_replay would create
+                replay_data = {
+                    "metadata": {
+                        "version": "1.0",
+                        "date": datetime.now().isoformat(),
+                        "total_steps": len(env.replay_data),
+                        "world_size": {
+                            "x": float(env.world.size_x),
+                            "y": float(env.world.size_y),
+                            "z": float(env.world.size_z)
+                        },
+                        "episode_info": metadata
+                    },
+                    "buildings": [
+                        {
+                            "x": float(b.x),
+                            "y": float(b.y),
+                            "width": float(b.width),
+                            "depth": float(b.depth),
+                            "height": float(b.height)
+                        } for b in env.world.buildings
+                    ],
+                    "frames": env.replay_data
+                }
+                
+                # Add to collection of all replays
+                all_replays[episode_key] = replay_data
+                print(f"Captured replay data for episode {episode_count} with {len(env.replay_data)} frames")
+                
+                # Reset the environment to clear replay data for next episode
+                env.reset()
+                
+            except Exception as e:
+                print(f"Error capturing replay for episode {episode_count}: {e}")
+        
+        # Save model periodically
+        if episode_count % episodes_per_save == 0:
+            intermediate_save_path = f"{save_path}_ep{episode_count}"
+            model.save(intermediate_save_path)
+            print(f"Intermediate model saved to {intermediate_save_path}")
+        
+        # Print progress
+        print(f"Episode {episode_count} completed. Total timesteps: {timesteps_so_far}/{total_timesteps}")
+    
+    # Save final model
+    model.save(save_path)
+    print(f"Final model saved to {save_path}")
+    
+    # Keep all replays in memory - no need to save to disk
+    print(f"Collected {episode_count} episodes of replay data in memory")
+    
+    # Close the environment
+    env.close()
+    
+    # Print training summary
+    print("\n" + "="*50)
+    print("MODEL TRAINING SUMMARY")
+    print("="*50)
+    print(f"Total episodes: {episode_count}")
+    print(f"Total timesteps: {timesteps_so_far}")
+    print(f"Final model saved to: {save_path}")
+    print(f"All {len(all_replays)} episodes collected in memory")
+    print("="*50)
+    
+    return model, all_replays
+
 
 def evaluate_agent(
     model_path="drone_agent_model", 

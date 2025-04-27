@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 import uvicorn
 from typing import Optional
 import os
-from swarm_trainer import train_agent
+from swarm_trainer import train_agent, train_agent_with_all_replays
 
 app = FastAPI(
     title="Drone Combat Training API",
@@ -35,6 +35,15 @@ class TrainingRequest(BaseModel):
     replay_path: str = Field(
         default="replay.json", description="Path to save replay data"
     )
+    collect_all_replays: bool = Field(
+        default=False, description="Whether to collect replays from all episodes"
+    )
+    max_steps: int = Field(
+        default=1000, ge=100, description="Maximum steps per episode"
+    )
+    episodes_per_save: int = Field(
+        default=5, ge=1, description="Number of episodes between each model save"
+    )
 
 
 class TrainingResponse(BaseModel):
@@ -46,6 +55,8 @@ class TrainingResponse(BaseModel):
     message: str
     replay_path: Optional[str] = None
     replay_data: Optional[dict] = None
+    all_replays_path: Optional[str] = None
+    episode_count: Optional[int] = None
 
 
 @app.post("/train", response_model=TrainingResponse)
@@ -62,12 +73,31 @@ async def train_drone_agent(request: TrainingRequest):
         )
         print(f"Training for {request.total_timesteps} timesteps")
 
-        # Train the agent
-        model, replay_data = train_agent(
-            total_timesteps=request.total_timesteps,
-            num_blue_drones=request.num_blue_drones,
-            num_red_drones=request.num_red_drones
-        )
+        # Train the agent - either with all replays or just the final one
+        if request.collect_all_replays:
+            print("Collecting replays from all episodes in memory")
+            model, all_replays = train_agent_with_all_replays(
+                total_timesteps=request.total_timesteps,
+                num_blue_drones=request.num_blue_drones,
+                num_red_drones=request.num_red_drones,
+                save_path=request.save_path,
+                record_replay=True,  # Always record when collecting all replays
+                max_steps=request.max_steps,
+                episodes_per_save=request.episodes_per_save
+            )
+            replay_data = all_replays
+            episode_count = len(all_replays) if isinstance(all_replays, dict) else 0
+        else:
+            print("Collecting only final replay")
+            model, replay_data = train_agent(
+                total_timesteps=request.total_timesteps,
+                num_blue_drones=request.num_blue_drones,
+                num_red_drones=request.num_red_drones,
+                save_path=request.save_path,
+                record_replay=request.record_replay,
+                replay_path=request.replay_path
+            )
+            episode_count = 1
 
         # Prepare response
         response = TrainingResponse(
@@ -79,8 +109,18 @@ async def train_drone_agent(request: TrainingRequest):
 
         # Include replay data in the response
         if replay_data:
-            response.replay_path = request.replay_path
-            response.replay_data = replay_data
+            response.episode_count = episode_count
+            
+            # Only include the actual replay data if it's not too large
+            # This prevents response size issues with many episodes
+            estimated_size = len(str(replay_data))
+            if estimated_size < 10000000:  # ~10MB limit
+                response.replay_data = replay_data
+                print(f"Including replay data in response (approx. {estimated_size/1000000:.2f} MB)")
+            else:
+                # If data is too large, just indicate it's too large
+                print(f"Replay data too large for response (approx. {estimated_size/1000000:.2f} MB)")
+                response.message += f". Replay data too large to include in response ({estimated_size/1000000:.2f} MB)."
 
         return response
 
