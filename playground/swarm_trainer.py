@@ -272,14 +272,15 @@ def train_agent_with_all_replays(total_timesteps=10000,
 
 
 def evaluate_agent(
-    model_path="drone_agent_model", 
+    model_path="dronebase_model", 
     num_episodes=1000, 
     record_replay=True, 
     replay_path="eval_replay.json",
     num_red_drones=1,
-    num_blue_drones=1
+    num_blue_drones=1,
+    replay_all_path="replay_all.json"
 ):
-    """Evaluate a trained agent over multiple episodes"""
+    """Evaluate a trained agent over multiple episodes using the dronebase_model by default"""
     # Create environment with replay recording if specified
     env = DroneCombatEnv(
         record_replay=record_replay,
@@ -301,6 +302,7 @@ def evaluate_agent(
         done = False
         episode_reward = 0
         episode_steps = 0
+        blue_killed_all = False
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)
@@ -309,7 +311,23 @@ def evaluate_agent(
             episode_steps += 1
             done = terminated or truncated
 
+        # Check if blue killed all reds (all red drones are hit at the end)
+        if hasattr(env, 'replay_data') and 'red_drones' in env.replay_data[-1]:
+            final_reds = env.replay_data[-1]['red_drones']
+            if all(d.get('hit', False) for d in final_reds):
+                blue_killed_all = True
+
         rewards.append(episode_reward)
+
+        if blue_killed_all:
+            # Save this replay and break
+            if record_replay and hasattr(env, 'save_replay'):
+                try:
+                    actual_path = env.save_replay(replay_all_path)
+                    print(f"Blue killed all reds in episode {i+1}! Replay saved to {actual_path}")
+                except Exception as e:
+                    print(f"Error saving replay: {e}")
+            break
         steps.append(episode_steps)
         print(f"Episode {i+1}: Reward = {episode_reward}, Steps = {episode_steps}")
         
@@ -336,7 +354,7 @@ if __name__ == "__main__":
                         help="Mode to run (test, train, visualize, evaluate)")
     parser.add_argument("--timesteps", type=int, default=10000,
                         help="Number of timesteps to train for")
-    parser.add_argument("--model-path", type=str, default="drone_agent_model",
+    parser.add_argument("--model-path", type=str, default="dronebase_model",
                         help="Path to save/load model")
     parser.add_argument("--episodes", type=int, default=10,
                         help="Number of episodes for evaluation")
@@ -386,10 +404,7 @@ if __name__ == "__main__":
             print(f"Recording replay data to {args.replay_path if args.replay_path else 'replay.json'}")
         print(f"Using {args.num_blue_drones} blue drones and {args.num_red_drones} red drones")
         evaluate_agent(
-            model_path=args.model_path, 
             num_episodes=args.episodes,
-            record_replay=args.record_replay,
-            replay_path=args.replay_path,
             num_red_drones=args.num_red_drones,
             num_blue_drones=args.num_blue_drones
         )
