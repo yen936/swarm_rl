@@ -9,6 +9,7 @@ import os
 """
 example: 
 python3 test_drone_rl.py --timesteps 10 --mode test
+python test_drone_rl.py --mode train --timesteps 50000 --model-path drone_combat_model --record-replay
 python3 test_drone_rl.py --mode visualize --model-path drone_combat_model   
 python3 test_drone_rl.py --mode train --timesteps 20000 --model-path drone_combat_model
 """
@@ -148,6 +149,17 @@ def train_simple_agent(total_timesteps=10000, save_path="drone_agent_model", rec
     model.save(save_path)
     print(f"Model saved to {save_path}")
     
+    # Explicitly save replay if recording was enabled
+    if record_replay and hasattr(env, 'save_replay'):
+        try:
+            actual_path = env.save_replay(replay_path)
+            print(f"Replay explicitly saved to {actual_path}")
+        except Exception as e:
+            print(f"Error explicitly saving replay: {e}")
+    
+    # Close the environment to ensure resources are released
+    env.close()
+    
     return model
 
 def evaluate_agent(model_path="drone_agent_model", num_episodes=10, record_replay=False, replay_path=None):
@@ -233,7 +245,8 @@ if __name__ == "__main__":
     elif args.mode == "train":
         print(f"Training agent for {args.timesteps} timesteps...")
         if args.record_replay:
-            print(f"Recording replay data to {args.replay_path if args.replay_path else 'replay_<timestamp>.json'}")
+            replay_path = args.replay_path if args.replay_path else 'replay.json'
+            print(f"Recording replay data to {replay_path}")
         train_simple_agent(
             total_timesteps=args.timesteps, 
             save_path=args.model_path,
@@ -244,7 +257,8 @@ if __name__ == "__main__":
     elif args.mode == "visualize":
         print("Visualizing episode...")
         if args.record_replay:
-            print(f"Recording replay data to {args.replay_path if args.replay_path else 'replay_<timestamp>.json'}")
+            replay_path = args.replay_path if args.replay_path else 'replay.json'
+            print(f"Recording replay data to {replay_path}")
         env = DroneCombatEnv(
             render_mode="human",
             record_replay=args.record_replay,
@@ -267,7 +281,7 @@ if __name__ == "__main__":
     elif args.mode == "evaluate":
         print(f"Evaluating agent over {args.episodes} episodes...")
         if args.record_replay:
-            print(f"Recording replay data to {args.replay_path if args.replay_path else 'replay_<timestamp>.json'}")
+            print(f"Recording replay data to {args.replay_path if args.replay_path else 'replay.json'}")
         evaluate_agent(
             model_path=args.model_path, 
             num_episodes=args.episodes,

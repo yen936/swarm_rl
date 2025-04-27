@@ -55,7 +55,7 @@ class DroneCombatEnv(gym.Env):
         
         # Rewards
         self.hit_reward = 1.0
-        self.kill_all_reward = 3.0  # Additional reward for killing all enemies
+        self.kill_all_reward = 5.0  # Additional reward for killing all enemies
         self.step_penalty = -0.01
         self.missed_shot_penalty = -0.05  # Optional penalty for missed shots
         self.proximity_reward_factor = 0.02  # Reward for getting closer to the target
@@ -176,10 +176,10 @@ class DroneCombatEnv(gym.Env):
         # Distance between drones
         distance = self._calculate_distance(shooter, target)
         
-        # Number of points to check along the line
-        num_points = 10
+        # Number of points to check along the line - increase for better accuracy
+        num_points = 20
         
-        # Check points along the line
+        # Check points along the line of sight
         for i in range(1, num_points):
             # Calculate point position (exclude start and end points)
             t = i / num_points
@@ -187,13 +187,16 @@ class DroneCombatEnv(gym.Env):
             point_y = shooter.y + dy * t
             point_z = shooter.z + dz * t
             
-            # Create a temporary drone at this position for collision check
-            temp_drone = type('TempDrone', (), {'x': point_x, 'y': point_y, 'z': point_z})
-            
-            # Check if point is inside any building
-            if self._check_building_collision(temp_drone):
-                return False
+            # Check if this point intersects with any building
+            for building in self.world.buildings:
+                # Check if point is inside building boundaries
+                if (point_x >= building.x and point_x <= building.x + building.width and
+                    point_y >= building.y and point_y <= building.y + building.depth and
+                    point_z >= 0 and point_z <= building.height):
+                    # Point is inside a building, no line of sight
+                    return False
         
+        # If we got here, there's a clear line of sight
         return True
     
     def _simulate_shot(self, shooter, target):
@@ -203,9 +206,8 @@ class DroneCombatEnv(gym.Env):
         Returns:
             bool: True if hit, False otherwise
         """
-        # Check line of sight first
-        if not self._has_line_of_sight(shooter, target):
-            return False
+        # Line of sight is now checked before calling this method
+        # So we can assume there is line of sight
         
         # Calculate distance between drones
         distance = self._calculate_distance(shooter, target)
@@ -271,7 +273,7 @@ class DroneCombatEnv(gym.Env):
         Reset the environment to initial state
         
         Returns:
-            observation: Initial observation for red agent
+            observation: Initial observation for blue agent
             info: Additional information
         """
         super().reset(seed=seed)
@@ -285,8 +287,8 @@ class DroneCombatEnv(gym.Env):
         # Re-initialize drones
         self._initialize_drones()
         
-        # Get initial observation (from red agent's perspective)
-        observation = self._get_normalized_observation("red")
+        # Get initial observation (from blue agent's perspective)
+        observation = self._get_normalized_observation("blue")
         
         # Additional info
         info = {}
@@ -304,7 +306,7 @@ class DroneCombatEnv(gym.Env):
         Take a step in the environment with the given action
         
         Args:
-            action: numpy array [dx, dy, dz, shoot] for red agent
+            action: numpy array [dx, dy, dz, shoot] for blue agent
             
         Returns:
             observation: New observation
@@ -317,11 +319,11 @@ class DroneCombatEnv(gym.Env):
         self.step_count += 1
         
         # Parse action
-        dx_red, dy_red, dz_red, shoot_red = action
+        dx_blue, dy_blue, dz_blue, shoot_blue = action
         
-        # For now, blue agent takes random actions
-        blue_action = self.action_space.sample()
-        dx_blue, dy_blue, dz_blue, shoot_blue = blue_action
+        # For now, red agent takes random actions
+        red_action = self.action_space.sample()
+        dx_red, dy_red, dz_red, shoot_red = red_action
         
         # Calculate distance before movement
         distance_before = self._calculate_distance(self.red_drone, self.blue_drone)
@@ -334,14 +336,14 @@ class DroneCombatEnv(gym.Env):
         blue_collision = self._move_drone(self.blue_drone, dx_blue, dy_blue, dz_blue)
         
         # Apply collision penalties if needed
-        if red_collision:
-            reward += self.collision_penalty
-            self.red_hit = True  # End episode if drone collides with building
-            
         if blue_collision:
-            # For blue drone collision, we give a positive reward to red
-            reward -= self.collision_penalty  # Negative of penalty is a reward
+            reward += self.collision_penalty  # Penalty for blue (trained agent) colliding
             self.blue_hit = True  # End episode if drone collides with building
+            
+        if red_collision:
+            # For red drone collision, we give a positive reward to blue
+            reward -= self.collision_penalty  # Negative of penalty is a reward
+            self.red_hit = True  # End episode if drone collides with building
         
         # Calculate distance after movement
         distance_after = self._calculate_distance(self.red_drone, self.blue_drone)
@@ -355,30 +357,43 @@ class DroneCombatEnv(gym.Env):
         
         # Process shooting
         if shoot_red > 0.5:  # Red agent shoots if action[3] > 0.5
-            hit = self._simulate_shot(self.red_drone, self.blue_drone)
-            if hit:
-                reward += self.hit_reward
-                self.blue_hit = True
-                # Add kill all reward if this was the only enemy
-                if not any(d.team == 'blue' for d in self.world.drones if d != self.blue_drone):
-                    reward += self.kill_all_reward
-            else:
-                reward += self.missed_shot_penalty
-        
+            # Check line of sight before simulating shot
+            has_los = self._has_line_of_sight(self.red_drone, self.blue_drone)
+            
+            # Only allow shots if there's line of sight
+            if has_los:
+                hit = self._simulate_shot(self.red_drone, self.blue_drone)
+                if hit:
+                    reward -= self.hit_reward  # Negative reward if blue gets hit
+                    # Also lose the kill all reward opportunity
+                    reward -= self.kill_all_reward
+                    self.blue_hit = True
+            
         if shoot_blue > 0.5:  # Blue agent shoots
-            hit = self._simulate_shot(self.blue_drone, self.red_drone)
-            if hit:
-                reward -= self.hit_reward  # Negative reward if red gets hit
-                # Also lose the kill all reward opportunity
-                reward -= self.kill_all_reward
-                self.red_hit = True
+            # Check line of sight before simulating shot
+            has_los = self._has_line_of_sight(self.blue_drone, self.red_drone)
+            
+            # Only allow shots if there's line of sight
+            if has_los:
+                hit = self._simulate_shot(self.blue_drone, self.red_drone)
+                if hit:
+                    reward += self.hit_reward  # Positive reward if blue hits red
+                    self.red_hit = True
+                    # Add kill all reward if this was the only enemy
+                    if not any(d.team == 'red' for d in self.world.drones if d != self.red_drone):
+                        reward += self.kill_all_reward
+                else:
+                    reward += self.missed_shot_penalty
+            else:
+                # No line of sight, shot automatically misses
+                reward += self.missed_shot_penalty
         
         # Check termination conditions
         terminated = self.red_hit or self.blue_hit or self.step_count >= self.max_steps
         truncated = False
         
         # Get new observation
-        observation = self._get_normalized_observation("red")
+        observation = self._get_normalized_observation("blue")
         
         # Create info dictionary
         info = {
@@ -423,19 +438,19 @@ class DroneCombatEnv(gym.Env):
         """Record a frame of replay data"""
         # Create frame data
         frame = {
-            "step": step,
+            "step": int(step),
             "timestamp": datetime.now().isoformat(),
             "red_drone": {
                 "x": float(self.red_drone.x),
                 "y": float(self.red_drone.y),
                 "z": float(self.red_drone.z),
-                "team": self.red_drone.team
+                "team": str(self.red_drone.team)
             },
             "blue_drone": {
                 "x": float(self.blue_drone.x),
                 "y": float(self.blue_drone.y),
                 "z": float(self.blue_drone.z),
-                "team": self.blue_drone.team
+                "team": str(self.blue_drone.team)
             },
             "buildings": [
                 {
@@ -446,11 +461,11 @@ class DroneCombatEnv(gym.Env):
                     "height": float(b.height)
                 } for b in self.world.buildings
             ],
-            "has_line_of_sight": self._has_line_of_sight(self.red_drone, self.blue_drone),
-            "red_shot": red_shot,
-            "blue_shot": blue_shot,
-            "red_hit": self.red_hit,
-            "blue_hit": self.blue_hit
+            "has_line_of_sight": bool(self._has_line_of_sight(self.red_drone, self.blue_drone)),
+            "red_shot": bool(red_shot),
+            "blue_shot": bool(blue_shot),
+            "red_hit": bool(self.red_hit),
+            "blue_hit": bool(self.blue_hit)
         }
         
         # Add action and reward if not initial frame
@@ -470,11 +485,16 @@ class DroneCombatEnv(gym.Env):
         # Use provided path or default
         if path is None:
             if self.replay_path is None:
-                # Create a default filename with timestamp
-                timestamp = int(time.time())
-                path = f"replay_{timestamp}.json"
+                # Use a simple default filename
+                path = "replay.json"
             else:
                 path = self.replay_path
+        
+        # Ensure the directory exists
+        import os
+        directory = os.path.dirname(path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
         
         # Create replay data structure
         replay = {
@@ -483,17 +503,30 @@ class DroneCombatEnv(gym.Env):
                 "date": datetime.now().isoformat(),
                 "total_steps": len(self.replay_data),
                 "world_size": {
-                    "x": self.world.size_x,
-                    "y": self.world.size_y,
-                    "z": self.world.size_z
+                    "x": float(self.world.size_x),
+                    "y": float(self.world.size_y),
+                    "z": float(self.world.size_z)
                 }
             },
             "frames": self.replay_data
         }
         
-        # Save to file
+        # Custom JSON encoder to handle NumPy types
+        class NumpyEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, np.bool_):
+                    return bool(obj)
+                return super(NumpyEncoder, self).default(obj)
+        
+        # Save to file with custom encoder
         with open(path, 'w') as f:
-            json.dump(replay, f, indent=2)
+            json.dump(replay, f, indent=2, cls=NumpyEncoder)
         
         print(f"Replay saved to {path}")
         return path
@@ -502,7 +535,11 @@ class DroneCombatEnv(gym.Env):
         """Clean up resources"""
         # Save replay if recording was enabled
         if self.record_replay and self.replay_data:
-            self.save_replay()
+            try:
+                replay_path = self.save_replay()
+                print(f"Successfully saved replay to {replay_path}")
+            except Exception as e:
+                print(f"Error saving replay: {e}")
             
         if self.viewer:
             self.viewer.close()
