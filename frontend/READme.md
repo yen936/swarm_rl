@@ -102,7 +102,3 @@ The project uses:
 ## License
 
 [Add your license information here] 
-
-
-python3 -m http.server 8052
-^ to run an actual run 
